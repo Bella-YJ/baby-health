@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>寶貝健康日記</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#f8fafc;font-family:'Helvetica Neue',Arial,sans-serif}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const CHILDREN_KEY = "shared-children-list";
+const recordKey  = id => `shared-records-${id}`;
+const tubesKey   = id => `shared-tubes-${id}`;
+const diaperKey  = id => `shared-diapers-${id}`;
+const medListKey = id => `shared-medlist-${id}`;
+const medLogKey  = id => `shared-medlog-${id}`;
+const sleepKey   = id => `shared-sleep-${id}`;
+
+const formatDate = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
+const todayStr = formatDate(new Date());
+const nowTime  = () => { const d=new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+const daysBetween = (a,b) => Math.round((new Date(b)-new Date(a))/86400000);
+
+const portionLabels = ["幾乎沒吃","吃了一點","吃了一半","吃得不錯","全部吃完"];
+const portionColors = ["#f87171","#fb923c","#facc15","#86efac","#4ade80"];
+const childColors   = ["#6ee7b7","#93c5fd","#fca5a5","#fcd34d","#c4b5fd","#6ee7f7"];
+const TUBE_TYPES = [
+  {key:"trach",label:"氣切管",emoji:"🫁",color:"#7c3aed",bg:"#ede9fe"},
+  {key:"ng",   label:"鼻胃管",emoji:"🟠",color:"#c2410c",bg:"#ffedd5"},
+];
+const POOP_STATES = [
+  {key:"normal",      label:"一般",   emoji:"🟡",color:"#ca8a04",bg:"#fef9c3"},
+  {key:"constipation",label:"便秘",   emoji:"🟤",color:"#92400e",bg:"#fef3c7"},
+  {key:"diarrhea",    label:"拉肚子", emoji:"💦",color:"#0369a1",bg:"#e0f2fe"},
+];
+const blankEntry = () => ({id:Date.now()+Math.random(),timeStart:"",timeEnd:"",type:null,milk:{water:"",scoops:""},solid:{portion:null,note:""},water:{amount:""}});
+const initialVitals = () => ({hr:"",spo2:"",time:"",note:""});
+
+const API_URL = "https://script.google.com/macros/s/AKfycbwo2Eejs8ZbO8C0pyussVHt6WqWSWpBJG8n3Od99uudwzeYr1_LxYB4Kgco2TdrhUb56g/exec";
+
+const load = async (key) => {
+  const r = await fetch(`${API_URL}?key=${encodeURIComponent(key)}`);
+  const d = await r.json();
+  return d.value ? JSON.parse(d.value) : null;
+};
+const save = async (key, val) => {
+  await fetch(API_URL, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({key, value: JSON.stringify(val)}),
+  });
+};
+
+function App() {
+  const [children,      setChildren]      = useState([]);
+  const [activeChildId, setActiveChildId] = useState(null);
+  const [records,       setRecords]       = useState({});
+  const [tubeRecords,   setTubeRecords]   = useState([]);
+  const [diaperRecords, setDiaperRecords] = useState({});
+  const [medList,       setMedList]       = useState([]);
+  const [medLog,        setMedLog]        = useState({});
+  const [sleepLog,      setSleepLog]      = useState({});
+  const [selectedDate,  setSelectedDate]  = useState(todayStr);
+  const [tab,           setTab]           = useState("vitals");
+  const [saved,         setSaved]         = useState(false);
+  const [loading,       setLoading]       = useState(true);
+  const [apiError,      setApiError]      = useState("");
+  const [showAddChild,  setShowAddChild]  = useState(false);
+  const pollRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const kids = await load(CHILDREN_KEY);
+        if (kids?.length) {
+          setChildren(kids);
+          setActiveChildId(kids[0].id);
+          const [recs,tubes,diapers,mlist,mlog,slog] = await Promise.all([
+            load(recordKey(kids[0].id)), load(tubesKey(kids[0].id)),
+            load(diaperKey(kids[0].id)), load(medListKey(kids[0].id)),
+            load(medLogKey(kids[0].id)), load(sleepKey(kids[0].id)),
+          ]);
+          setRecords(recs||{}); setTubeRecords(tubes||[]); setDiaperRecords(diapers||{});
+          setMedList(mlist||[]); setMedLog(mlog||{}); setSleepLog(slog||{});
+        }
+      } catch(e) { setApiError(e.message); }
+      setLoading(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!activeChildId) return;
+    pollRef.current = setInterval(async () => {
+      try {
+        const [recs,tubes,diapers,mlist,mlog,slog,kids] = await Promise.all([
+          load(recordKey(activeChildId)), load(tubesKey(activeChildId)),
+          load(diaperKey(activeChildId)), load(medListKey(activeChildId)),
+          load(medLogKey(activeChildId)), load(sleepKey(activeChildId)),
+          load(CHILDREN_KEY),
+        ]);
+        if(recs)    setRecords(recs);    if(tubes)   setTubeRecords(tubes);
+        if(diapers) setDiaperRecords(diapers); if(mlist)   setMedList(mlist);
+        if(mlog)    setMedLog(mlog);     if(slog)    setSleepLog(slog);
+        if(kids)    setChildren(kids);
+      } catch(e) {}
+    }, 15000);
+    return () => clearInterval(pollRef.current);
+  }, [activeChildId]);
+
+  const switchChild = async (id) => {
+    setActiveChildId(id);
+    try {
+      const [recs,tubes,diapers,mlist,mlog,slog] = await Promise.all([
+        load(recordKey(id)), load(tubesKey(id)), load(diaperKey(id)),
+        load(medListKey(id)), load(medLogKey(id)), load(sleepKey(id)),
+      ]);
+      setRecords(recs||{}); setTubeRecords(tubes||[]); setDiaperRecords(diapers||{});
+      setMedList(mlist||[]); setMedLog(mlog||{}); setSleepLog(slog||{});
+    } catch(e) {}
+    setSelectedDate(todayStr); setTab("vitals");
+  };
+
+  const addChild = async (name) => {
+    if (!name.trim()) return;
+    const id = `child-${Date.now()}`;
+    const colorIdx = children.length % childColors.length;
+    const updated = [...children, {id, name:name.trim(), colorIdx}];
+    setChildren(updated); await save(CHILDREN_KEY, updated);
+    setActiveChildId(id); setRecords({}); setTubeRecords([]); setDiaperRecords({});
+    setMedList([]); setMedLog({}); setSleepLog({});
+    setSelectedDate(todayStr); setTab("vitals"); setShowAddChild(false);
+  };
+
+  const removeChild = async (id) => {
+    const updated = children.filter(c=>c.id!==id);
+    setChildren(updated); await save(CHILDREN_KEY, updated);
+    if (activeChildId===id) {
+      if (updated.length) await switchChild(updated[0].id);
+      else { setActiveChildId(null); setRecords({}); setTubeRecords([]); setDiaperRecords({}); setMedList([]); setMedLog({}); setSleepLog({}); }
+    }
+  };
+
+  const flash = () => { setSaved(true); setTimeout(()=>setSaved(false),1500); };
+  const saveRecords  = async u => { setRecords(u);       await save(recordKey(activeChildId),u);  flash(); };
+  const saveTubes    = async u => { setTubeRecords(u);   await save(tubesKey(activeChildId),u);   flash(); };
+  const saveDiapers  = async u => { setDiaperRecords(u); await save(diaperKey(activeChildId),u);  flash(); };
+  const saveMedList  = async u => { setMedList(u);       await save(medListKey(activeChildId),u); flash(); };
+  const saveMedLog   = async u => { setMedLog(u);        await save(medLogKey(activeChildId),u);  flash(); };
+  const saveSleepLog = async u => { setSleepLog(u);      await save(sleepKey(activeChildId),u);   flash(); };
+
+  const getDay = date => records[date]||{vitals:[],feedings:[]};
+  const addVital    = e  => { const d=getDay(selectedDate); saveRecords({...records,[selectedDate]:{...d,vitals:[...(d.vitals||[]),{...e,id:Date.now()}]}}); };
+  const removeVital = id => { const d=getDay(selectedDate); saveRecords({...records,[selectedDate]:{...d,vitals:d.vitals.filter(v=>v.id!==id)}}); };
+  const getFeedings   = ()     => (getDay(selectedDate).feedings||[]).slice().sort((a,b)=>(a.timeStart||"").localeCompare(b.timeStart||""));
+  const saveFeedings  = fs     => { const d=getDay(selectedDate); saveRecords({...records,[selectedDate]:{...d,feedings:fs}}); };
+  const addFeeding    = e      => saveFeedings([...(getDay(selectedDate).feedings||[]),{...e,id:Date.now()}]);
+  const removeFeeding = id     => saveFeedings((getDay(selectedDate).feedings||[]).filter(e=>e.id!==id));
+  const updateFeeding = (id,u) => saveFeedings((getDay(selectedDate).feedings||[]).map(e=>e.id===id?{...e,...u}:e));
+  const addTube    = e      => saveTubes([...tubeRecords,{...e,id:Date.now()}]);
+  const removeTube = id     => saveTubes(tubeRecords.filter(t=>t.id!==id));
+  const updateTube = (id,u) => saveTubes(tubeRecords.map(t=>t.id===id?{...t,...u}:t));
+  const getDayDiapers  = ()     => (diaperRecords[selectedDate]||[]).slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+  const addDiaper      = e      => saveDiapers({...diaperRecords,[selectedDate]:[...(diaperRecords[selectedDate]||[]),{...e,id:Date.now()}]});
+  const removeDiaper   = id     => saveDiapers({...diaperRecords,[selectedDate]:(diaperRecords[selectedDate]||[]).filter(d=>d.id!==id)});
+  const updateDiaper   = (id,u) => saveDiapers({...diaperRecords,[selectedDate]:(diaperRecords[selectedDate]||[]).map(d=>d.id===id?{...d,...u}:d)});
+  const addMed       = e      => saveMedList([...medList,{...e,id:Date.now()}]);
+  const removeMed    = id     => saveMedList(medList.filter(m=>m.id!==id));
+  const updateMed    = (id,u) => saveMedList(medList.map(m=>m.id===id?{...m,...u}:m));
+  const getDayMeds   = ()     => (medLog[selectedDate]||[]).slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+  const addMedLog    = e      => saveMedLog({...medLog,[selectedDate]:[...(medLog[selectedDate]||[]),{...e,id:Date.now()}]});
+  const removeMedLog = id     => saveMedLog({...medLog,[selectedDate]:(medLog[selectedDate]||[]).filter(m=>m.id!==id)});
+  const updateMedLog = (id,u) => saveMedLog({...medLog,[selectedDate]:(medLog[selectedDate]||[]).map(m=>m.id===id?{...m,...u}:m)});
+  const getDaySleep  = ()     => (sleepLog[selectedDate]||[]).slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+  const addSleep     = e      => saveSleepLog({...sleepLog,[selectedDate]:[...(sleepLog[selectedDate]||[]),{...e,id:Date.now()}]});
+  const removeSleep  = id     => saveSleepLog({...sleepLog,[selectedDate]:(sleepLog[selectedDate]||[]).filter(s=>s.id!==id)});
+  const updateSleep  = (id,u) => saveSleepLog({...sleepLog,[selectedDate]:(sleepLog[selectedDate]||[]).map(s=>s.id===id?{...s,...u}:s)});
+
+  const shiftDate = n => { const d=new Date(selectedDate); d.setDate(d.getDate()+n); setSelectedDate(formatDate(d)); };
+  const day = getDay(selectedDate);
+  const allDates = Object.keys(records).sort().reverse();
+  const activeChild = children.find(c=>c.id===activeChildId);
+
+  if (loading) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#94a3b8",fontSize:16}}>連線中…</div>;
+
+  if (apiError) return (
+    <div style={{padding:24,maxWidth:500,margin:"0 auto"}}>
+      <div style={{background:"#fef2f2",border:"1.5px solid #fca5a5",borderRadius:14,padding:20}}>
+        <div style={{fontSize:16,fontWeight:700,color:"#dc2626",marginBottom:8}}>⚠️ 無法連線</div>
+        <div style={{fontSize:13,color:"#7f1d1d",marginBottom:12}}>錯誤：{apiError}</div>
+        <div style={{fontSize:13,color:"#334155",lineHeight:1.8}}>
+          請確認 Apps Script 已部署，存取權為「所有人」，並已完成 Google 授權。
+        </div>
+        <button style={{...S.primaryBtn,marginTop:16}} onClick={()=>window.location.reload()}>重新連線</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={S.app}>
+      <div style={{...S.header,background:activeChild?`linear-gradient(135deg,${childColors[activeChild.colorIdx]},#3b82f6)`:"linear-gradient(135deg,#6ee7b7,#3b82f6)"}}>
+        <div style={{fontSize:32}}>🌿</div>
+        <div style={{flex:1}}><div style={S.title}>寶貝健康日記</div><div style={S.subtitle}>每日記錄・關注成長</div></div>
+        {saved&&<div style={S.savedBadge}>✓ 已儲存</div>}
+      </div>
+
+      <div style={S.childBar}>
+        <div style={S.childList}>
+          {children.map(c=>(
+            <button key={c.id} style={{...S.childBtn,...(c.id===activeChildId?{...S.childBtnActive,borderColor:childColors[c.colorIdx],background:childColors[c.colorIdx]+"22"}:{})}} onClick={()=>switchChild(c.id)}>
+              <span style={{...S.childDot,background:childColors[c.colorIdx]}}/>
+              {c.name}
+              {c.id===activeChildId&&<span style={S.removeChildBtn} onClick={e=>{e.stopPropagation();if(window.confirm(`確定移除「${c.name}」？`))removeChild(c.id);}}>✕</span>}
+            </button>
+          ))}
+          <button style={S.addChildBtn} onClick={()=>setShowAddChild(true)}>＋ 新增</button>
+        </div>
+      </div>
+
+      {showAddChild&&<AddChildModal onAdd={addChild} onCancel={()=>setShowAddChild(false)}/>}
+
+      {!activeChildId ? <div style={S.empty}>請先點擊「＋ 新增」建立孩子的資料</div> : (<>
+        {tab!=="tubes"&&tab!=="meds"&&(
+          <div style={S.datebar}>
+            <button style={S.arrowBtn} onClick={()=>shiftDate(-1)}>‹</button>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <input type="date" value={selectedDate} max={todayStr} onChange={e=>setSelectedDate(e.target.value)} style={S.dateInput}/>
+              {selectedDate===todayStr&&<span style={S.todayTag}>今天</span>}
+            </div>
+            <button style={{...S.arrowBtn,opacity:selectedDate>=todayStr?0.3:1}} onClick={()=>shiftDate(1)} disabled={selectedDate>=todayStr}>›</button>
+          </div>
+        )}
+        <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0"}}>
+          <div style={S.tabs}>{[["vitals","💓 生理"],["meals","🍱 用餐"],["diaper","🧷 尿布"],["sleep","😴 睡眠"]].map(([k,l])=><button key={k} style={{...S.tab,...(tab===k?S.tabActive:{})}} onClick={()=>setTab(k)}>{l}</button>)}</div>
+          <div style={{...S.tabs,borderTop:"1px solid #f1f5f9"}}>{[["meds","💊 用藥"],["tubes","🔧 管路"],["history","📋 歷史"]].map(([k,l])=><button key={k} style={{...S.tab,...(tab===k?S.tabActive:{})}} onClick={()=>setTab(k)}>{l}</button>)}</div>
+        </div>
+        <div style={S.content}>
+          {tab==="vitals"  && <VitalsTab vitals={day.vitals||[]} onAdd={addVital} onRemove={removeVital}/>}
+          {tab==="meals"   && <FeedingsTab feedings={getFeedings()} onAdd={addFeeding} onRemove={removeFeeding} onUpdate={updateFeeding}/>}
+          {tab==="diaper"  && <DiaperTab diapers={getDayDiapers()} onAdd={addDiaper} onRemove={removeDiaper} onUpdate={updateDiaper}/>}
+          {tab==="sleep"   && <SleepTab sleeps={getDaySleep()} onAdd={addSleep} onRemove={removeSleep} onUpdate={updateSleep}/>}
+          {tab==="meds"    && <MedsTab medList={medList} onAddMed={addMed} onRemoveMed={removeMed} onUpdateMed={updateMed} medLog={getDayMeds()} onAddLog={addMedLog} onRemoveLog={removeMedLog} onUpdateLog={updateMedLog}/>}
+          {tab==="tubes"   && <TubesTab tubeRecords={tubeRecords} onAdd={addTube} onRemove={removeTube} onUpdate={updateTube}/>}
+          {tab==="history" && <HistoryTab records={records} allDates={allDates} tubeRecords={tubeRecords} diaperRecords={diaperRecords} medLog={medLog} sleepLog={sleepLog} onSelect={d=>{setSelectedDate(d);setTab("vitals");}}/>}
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+function AddChildModal({onAdd,onCancel}) {
+  const [name,setName]=useState("");
+  return <div style={S.modalOverlay}><div style={S.modal}><div style={S.cardTitle}>新增孩子</div><input autoFocus placeholder="請輸入孩子的名字" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onAdd(name)} style={{...S.input,marginBottom:12}}/><div style={{display:"flex",gap:8}}><button style={{...S.primaryBtn,flex:1}} onClick={()=>onAdd(name)}>確認新增</button><button style={{...S.ghostBtn,flex:1}} onClick={onCancel}>取消</button></div></div></div>;
+}
+
+function VitalsTab({vitals,onAdd,onRemove}) {
+  const [form,setForm]=useState(initialVitals());
+  const [err,setErr]=useState("");
+  const handleAdd = () => {
+    if(!form.hr&&!form.spo2){setErr("請至少輸入心跳或血氧數值");return;}
+    if(form.hr&&(isNaN(form.hr)||form.hr<40||form.hr>220)){setErr("心跳數值不合理（40–220）");return;}
+    if(form.spo2&&(isNaN(form.spo2)||form.spo2<70||form.spo2>100)){setErr("血氧數值不合理（70–100）");return;}
+    setErr(""); onAdd({...form,time:form.time||nowTime()}); setForm(initialVitals());
+  };
+  const hrS   = hr => {const n=Number(hr);if(n<60)return{label:"偏低",color:"#60a5fa"};if(n>140)return{label:"偏高",color:"#f87171"};return{label:"正常",color:"#4ade80"};};
+  const spo2S = v  => Number(v)<95?{label:"偏低",color:"#f87171"}:{label:"正常",color:"#4ade80"};
+  return (<div>
+    <div style={S.card}>
+      <div style={S.cardTitle}>新增量測紀錄</div>
+      <div style={{display:"flex",gap:10}}><div style={S.formGroup}><label style={S.label}>量測時間</label><input type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})} style={S.input}/></div></div>
+      <div style={{display:"flex",gap:10}}>
+        <div style={S.formGroup}><label style={S.label}>💓 心跳（bpm）</label><input type="number" placeholder="例：95" value={form.hr} onChange={e=>setForm({...form,hr:e.target.value})} style={S.input} min="40" max="220"/></div>
+        <div style={S.formGroup}><label style={S.label}>🩸 血氧（%）</label><input type="number" placeholder="例：98" value={form.spo2} onChange={e=>setForm({...form,spo2:e.target.value})} style={S.input} min="70" max="100"/></div>
+      </div>
+      <div style={S.formGroup}><label style={S.label}>備註</label><input placeholder="活動狀態、異常情形..." value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={S.input}/></div>
+      {err&&<div style={S.error}>{err}</div>}
+      <button style={S.primaryBtn} onClick={handleAdd}>＋ 新增紀錄</button>
+    </div>
+    {vitals.length>0&&<div style={S.card}><div style={S.cardTitle}>當日量測記錄</div>{vitals.map(v=>(
+      <div key={v.id} style={S.vitalRow}>
+        <div style={S.vitalTime}>{v.time||"—"}</div>
+        <div style={{flex:1,display:"flex",flexWrap:"wrap",gap:6}}>
+          {v.hr&&<div style={S.vitalChip}><span>💓 {v.hr} bpm</span><span style={{...S.statusDot,background:hrS(v.hr).color}}>{hrS(v.hr).label}</span></div>}
+          {v.spo2&&<div style={S.vitalChip}><span>🩸 {v.spo2}%</span><span style={{...S.statusDot,background:spo2S(v.spo2).color}}>{spo2S(v.spo2).label}</span></div>}
+          {v.note&&<div style={S.vitalNote}>{v.note}</div>}
+        </div>
+        <button style={S.iconBtn} onClick={()=>onRemove(v.id)}>✕</button>
+      </div>
+    ))}</div>}
+    {vitals.length===0&&<div style={S.empty}>今日尚未記錄生理數值</div>}
+  </div>);
+}
+
+function FeedingsTab({feedings,onAdd,onRemove,onUpdate}) {
+  const [k,setK]=useState(0);
+  return (<div>
+    <div style={S.card}><div style={S.cardTitle}>新增餵食記錄</div><EntryForm key={k} onSave={e=>{onAdd(e);setK(x=>x+1);}} onCancel={null}/></div>
+    {feedings.length>0&&<div style={S.card}>
+      <div style={{display:"flex",alignItems:"center",marginBottom:12}}><div style={{...S.cardTitle,marginBottom:0,flex:1}}>今日餵食記錄</div><span style={{background:"#f1f5f9",color:"#64748b",fontSize:11,padding:"2px 9px",borderRadius:10}}>{feedings.length} 筆</span></div>
+      {feedings.map((e,i)=><FeedingRow key={e.id} entry={e} idx={i} onRemove={()=>onRemove(e.id)} onUpdate={u=>onUpdate(e.id,u)}/>)}
+    </div>}
+  </div>);
+}
+
+function FeedingRow({entry,idx,onRemove,onUpdate}) {
+  const [exp,setExp]=useState(false);
+  const timeLabel = entry.timeStart?(entry.timeEnd?`${entry.timeStart} – ${entry.timeEnd}`:entry.timeStart):"未記錄時間";
+  const icons={milk:"🍼",solid:"🥣",water:"💧"}; const labels={milk:"牛奶",solid:"副食品",water:"開水"};
+  const summary = () => {
+    if(entry.type==="milk")  return [entry.milk.water&&`${entry.milk.water}ml`,entry.milk.scoops&&`${entry.milk.scoops}匙`].filter(Boolean).join(" · ");
+    if(entry.type==="solid") return [entry.solid.portion!==null&&portionLabels[entry.solid.portion],entry.solid.note].filter(Boolean).join(" · ");
+    if(entry.type==="water") return entry.water.amount?`${entry.water.amount}ml`:"";
+    return "";
+  };
+  return (<div style={S.entryRow}>
+    <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+      <span style={S.entryIndex}>{idx+1}</span>
+      <span style={{fontSize:12,color:"#94a3b8",fontWeight:600}}>{timeLabel}</span>
+      {entry.type&&<span style={{...S.typeTag,...typeTagColor(entry.type)}}>{icons[entry.type]} {labels[entry.type]}</span>}
+      {summary()&&<span style={{fontSize:12,color:"#475569"}}>{summary()}</span>}
+    </div></div>
+    <button style={S.iconBtn} onClick={()=>setExp(!exp)}>✏️</button>
+    <button style={S.iconBtn} onClick={onRemove}>✕</button>
+    {exp&&<div style={{width:"100%",marginTop:8}}><EntryForm initial={entry} onSave={u=>{onUpdate(u);setExp(false);}} onCancel={()=>setExp(false)} saveLabel="儲存修改"/></div>}
+  </div>);
+}
+
+const typeTagColor = t => ({milk:{background:"#dbeafe",color:"#2563eb"},solid:{background:"#dcfce7",color:"#16a34a"},water:{background:"#e0f7fa",color:"#0891b2"}}[t]||{});
+
+function EntryForm({initial,onSave,onCancel,saveLabel="新增"}) {
+  const [form,setForm]=useState(()=>initial?{...blankEntry(),...initial}:{...blankEntry(),timeStart:nowTime()});
+  const [err,setErr]=useState("");
+  const set=p=>setForm(f=>({...f,...p}));
+  const setMilk=p=>setForm(f=>({...f,milk:{...f.milk,...p}}));
+  const setSolid=p=>setForm(f=>({...f,solid:{...f.solid,...p}}));
+  const setWater=p=>setForm(f=>({...f,water:{...f.water,...p}}));
+  const handleSave=()=>{ if(!form.type){setErr("請選擇餐點類型");return;} setErr(""); onSave(form); };
+  return (<div style={S.entryForm}>
+    <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:10}}>
+      <div style={S.formGroup}><label style={S.label}>開始時間</label><input type="time" value={form.timeStart} onChange={e=>set({timeStart:e.target.value})} style={S.input}/></div>
+      <div style={{paddingBottom:11,color:"#cbd5e1",fontSize:16,flexShrink:0}}>–</div>
+      <div style={S.formGroup}><label style={S.label}>結束時間</label><input type="time" value={form.timeEnd} onChange={e=>set({timeEnd:e.target.value})} style={S.input}/></div>
+    </div>
+    <div style={{marginBottom:10}}>
+      <label style={{...S.label,color:err?"#ef4444":"#94a3b8"}}>餐點類型{err&&<span style={{fontSize:11,fontWeight:600}}> ← {err}</span>}</label>
+      <div style={{display:"flex",gap:6,marginTop:4}}>
+        {[["milk","🍼 牛奶"],["solid","🥣 副食品"],["water","💧 開水"]].map(([type,label])=>(
+          <button key={type} style={{...S.typeBtn,...(form.type===type?{...S.typeBtnActive,...typeTagColor(type)}:{}),...(err&&!form.type?{borderColor:"#fca5a5"}:{})}}
+            onClick={()=>{set({type:form.type===type?null:type});setErr("");}}>{label}</button>
+        ))}
+      </div>
+    </div>
+    {form.type==="milk"&&<div style={{...S.subForm,borderColor:"#bfdbfe"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#2563eb",marginBottom:8}}>🍼 牛奶詳細</div>
+      <div style={{display:"flex",gap:8}}>
+        <div style={S.formGroup}><label style={S.label}>水量（ml）</label><input type="number" placeholder="例：150" value={form.milk.water} onChange={e=>setMilk({water:e.target.value})} style={S.input} min="0"/></div>
+        <div style={S.formGroup}><label style={S.label}>奶粉匙數</label><input type="number" placeholder="例：3" value={form.milk.scoops} onChange={e=>setMilk({scoops:e.target.value})} style={S.input} min="0" step="0.5"/></div>
+      </div>
+    </div>}
+    {form.type==="solid"&&<div style={{...S.subForm,borderColor:"#bbf7d0"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#16a34a",marginBottom:8}}>🥣 副食品詳細</div>
+      <div style={{marginBottom:8}}><label style={S.label}>進食份量</label>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
+          {portionLabels.map((pl,i)=><button key={i} style={{...S.portionBtn,background:form.solid.portion===i?portionColors[i]:"#f1f5f9",color:form.solid.portion===i?"#fff":"#64748b",borderColor:form.solid.portion===i?portionColors[i]:"transparent"}} onClick={()=>setSolid({portion:form.solid.portion===i?null:i})}>{pl}</button>)}
+        </div>
+      </div>
+      <div style={S.formGroup}><label style={S.label}>食物內容備註</label><input placeholder="例：南瓜泥、雞肉粥..." value={form.solid.note} onChange={e=>setSolid({note:e.target.value})} style={S.input}/></div>
+    </div>}
+    {form.type==="water"&&<div style={{...S.subForm,borderColor:"#a5f3fc"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#0891b2",marginBottom:8}}>💧 開水詳細</div>
+      <div style={S.formGroup}><label style={S.label}>水量（ml）</label><input type="number" placeholder="例：50" value={form.water.amount} onChange={e=>setWater({amount:e.target.value})} style={S.input} min="0"/></div>
+    </div>}
+    <div style={{display:"flex",gap:8,marginTop:4}}>
+      <button style={{...S.primaryBtn,flex:1}} onClick={handleSave}>{saveLabel}</button>
+      {onCancel&&<button style={{...S.ghostBtn,flex:1}} onClick={onCancel}>取消</button>}
+    </div>
+  </div>);
+}
+
+function SleepTab({sleeps,onAdd,onRemove}) {
+  const [form,setForm]=useState({type:"",time:nowTime(),note:""});
+  const [err,setErr]=useState("");
+  const totalSleep = () => {
+    const evs=sleeps.slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+    let total=0,last=null;
+    evs.forEach(e=>{ if(e.type==="sleep") last=e.time; else if(e.type==="wake"&&last){const[sh,sm]=last.split(":").map(Number),[wh,wm]=e.time.split(":").map(Number);let m=(wh*60+wm)-(sh*60+sm);if(m<0)m+=1440;total+=m;last=null;} });
+    return total?`${Math.floor(total/60)}h ${total%60}m`:null;
+  };
+  const handleAdd=()=>{ if(!form.type){setErr("請選擇入睡或起床");return;} setErr(""); onAdd({...form}); setForm({type:"",time:nowTime(),note:""}); };
+  return (<div>
+    <div style={S.card}>
+      <div style={S.cardTitle}>新增記錄</div>
+      <div style={{display:"flex",gap:8,marginBottom:4}}>
+        {[["sleep","😴 入睡"],["wake","🌤 起床"]].map(([type,label])=>(
+          <button key={type} style={{flex:1,padding:"10px",borderRadius:12,border:"2px solid",borderColor:form.type===type?(type==="sleep"?"#0369a1":"#ca8a04"):err?"#fca5a5":"#e2e8f0",background:form.type===type?(type==="sleep"?"#e0f2fe":"#fef9c3"):"#f8fafc",cursor:"pointer",fontSize:13,fontWeight:700,color:form.type===type?(type==="sleep"?"#0369a1":"#ca8a04"):"#94a3b8"}}
+            onClick={()=>{setForm({...form,type});setErr("");}}>{label}</button>
+        ))}
+      </div>
+      {err&&<div style={{color:"#ef4444",fontSize:12,marginBottom:8}}>{err}</div>}
+      <div style={S.formGroup}><label style={S.label}>時間</label><input type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})} style={S.input}/></div>
+      <div style={S.formGroup}><label style={S.label}>備註</label><input placeholder="例：午睡、睡前哭鬧..." value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={S.input}/></div>
+      <button style={S.primaryBtn} onClick={handleAdd}>＋ 新增</button>
+    </div>
+    <div style={S.card}><div style={{display:"flex",gap:8}}>
+      <div style={{flex:1,background:"#f0f9ff",borderRadius:10,padding:"10px 12px",textAlign:"center"}}><div style={{fontSize:20}}>😴</div><div style={{fontSize:13,fontWeight:700,color:"#0369a1",marginTop:2}}>{sleeps.filter(s=>s.type==="sleep").length} 次</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>入睡</div></div>
+      <div style={{flex:1,background:"#fefce8",borderRadius:10,padding:"10px 12px",textAlign:"center"}}><div style={{fontSize:20}}>🌤</div><div style={{fontSize:13,fontWeight:700,color:"#ca8a04",marginTop:2}}>{sleeps.filter(s=>s.type==="wake").length} 次</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>起床</div></div>
+      <div style={{flex:1,background:"#f0fdf4",borderRadius:10,padding:"10px 12px",textAlign:"center"}}><div style={{fontSize:20}}>⏱</div><div style={{fontSize:13,fontWeight:700,color:"#16a34a",marginTop:2}}>{totalSleep()||"—"}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>累計睡眠</div></div>
+    </div></div>
+    {sleeps.length>0&&<div style={S.card}><div style={S.cardTitle}>當日睡眠記錄</div>{sleeps.map((s,i)=>(
+      <div key={s.id} style={S.entryRow}>
+        <div style={{flex:1,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <span style={S.entryIndex}>{i+1}</span>
+          <span style={{fontSize:13,fontWeight:600,color:"#475569"}}>{s.time||"—"}</span>
+          <span style={{padding:"2px 8px",borderRadius:10,fontSize:12,fontWeight:700,background:s.type==="sleep"?"#e0f2fe":"#fef9c3",color:s.type==="sleep"?"#0369a1":"#ca8a04"}}>{s.type==="sleep"?"😴 入睡":"🌤 起床"}</span>
+          {s.note&&<span style={{fontSize:12,color:"#94a3b8",fontStyle:"italic"}}>{s.note}</span>}
+        </div>
+        <button style={S.iconBtn} onClick={()=>onRemove(s.id)}>✕</button>
+      </div>
+    ))}</div>}
+  </div>);
+}
+
+function MedsTab({medList,onAddMed,onRemoveMed,onUpdateMed,medLog,onAddLog,onRemoveLog,onUpdateLog}) {
+  const [showMgr,setShowMgr]=useState(false);
+  return (<div>
+    <div style={{...S.card,marginBottom:8}}>
+      <div style={{display:"flex",alignItems:"center",marginBottom:showMgr?12:0}}>
+        <div style={{...S.cardTitle,marginBottom:0,flex:1}}>💊 藥物清單</div>
+        <button style={{...S.ghostBtn,width:"auto",padding:"4px 12px",marginTop:0,fontSize:12}} onClick={()=>setShowMgr(!showMgr)}>{showMgr?"收起":"管理藥物"}</button>
+      </div>
+      {showMgr&&<MedManager medList={medList} onAdd={onAddMed} onRemove={onRemoveMed} onUpdate={onUpdateMed}/>}
+      {!showMgr&&medList.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>{medList.map(m=><span key={m.id} style={{background:"#f0fdf4",color:"#16a34a",padding:"3px 10px",borderRadius:10,fontSize:12,fontWeight:600}}>💊 {m.name}{m.dose?` · ${m.dose}`:""}{m.scheduledTime?` · ⏰${m.scheduledTime}`:""}</span>)}</div>}
+      {!showMgr&&medList.length===0&&<div style={{color:"#94a3b8",fontSize:12,marginTop:8}}>尚未設定藥物，點擊「管理藥物」新增</div>}
+    </div>
+    <MedLogSection medList={medList} medLog={medLog} onAdd={onAddLog} onRemove={onRemoveLog} onUpdate={onUpdateLog}/>
+  </div>);
+}
+
+function MedManager({medList,onAdd,onRemove,onUpdate}) {
+  const [form,setForm]=useState({name:"",dose:"",scheduledTime:""});
+  const [editId,setEditId]=useState(null);
+  const handleAdd=()=>{ if(!form.name.trim()) return; onAdd({...form}); setForm({name:"",dose:"",scheduledTime:""}); };
+  return (<div>
+    {medList.map(m=>(<div key={m.id} style={{...S.entryRow,alignItems:"flex-start"}}>
+      {editId===m.id?<MedEditForm med={m} onSave={u=>{onUpdate(m.id,u);setEditId(null);}} onCancel={()=>setEditId(null)}/>:(<>
+        <div style={{flex:1}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#1e293b"}}>💊 {m.name}</div>
+          <div style={{display:"flex",gap:10,marginTop:2,flexWrap:"wrap"}}>
+            {m.dose&&<span style={{fontSize:11,color:"#64748b"}}>劑量：{m.dose}</span>}
+            {m.scheduledTime&&<span style={{fontSize:11,color:"#7c3aed"}}>⏰ 預計：{m.scheduledTime}</span>}
+          </div>
+        </div>
+        <button style={S.iconBtn} onClick={()=>setEditId(m.id)}>✏️</button>
+        <button style={S.iconBtn} onClick={()=>{if(window.confirm(`確定移除「${m.name}」？`))onRemove(m.id);}}>✕</button>
+      </>)}
+    </div>))}
+    <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid #f1f5f9"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:8}}>新增藥物</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <div style={{flex:"1 1 140px"}}><label style={S.label}>藥物名稱</label><input placeholder="例：支氣管擴張劑" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={S.input}/></div>
+        <div style={{flex:"1 1 80px"}}><label style={S.label}>劑量</label><input placeholder="例：2ml" value={form.dose} onChange={e=>setForm({...form,dose:e.target.value})} style={S.input}/></div>
+        <div style={{flex:"1 1 100px"}}><label style={S.label}>預計服用時間</label><input type="time" value={form.scheduledTime} onChange={e=>setForm({...form,scheduledTime:e.target.value})} style={S.input}/></div>
+      </div>
+      <button style={{...S.primaryBtn,marginTop:8}} onClick={handleAdd}>＋ 加入清單</button>
+    </div>
+  </div>);
+}
+
+function MedEditForm({med,onSave,onCancel}) {
+  const [form,setForm]=useState({name:med.name,dose:med.dose||"",scheduledTime:med.scheduledTime||""});
+  return (<div style={{width:"100%",display:"flex",flexWrap:"wrap",gap:6,alignItems:"flex-end"}}>
+    <div style={{flex:"1 1 120px"}}><label style={S.label}>名稱</label><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} style={S.input}/></div>
+    <div style={{flex:"1 1 70px"}}><label style={S.label}>劑量</label><input value={form.dose} onChange={e=>setForm({...form,dose:e.target.value})} style={S.input}/></div>
+    <div style={{flex:"1 1 90px"}}><label style={S.label}>預計時間</label><input type="time" value={form.scheduledTime} onChange={e=>setForm({...form,scheduledTime:e.target.value})} style={S.input}/></div>
+    <button style={{...S.primaryBtn,width:"auto",padding:"8px 12px",marginTop:0,flexShrink:0}} onClick={()=>onSave(form)}>✓</button>
+    <button style={{...S.ghostBtn,width:"auto",padding:"8px 12px",marginTop:0,flexShrink:0}} onClick={onCancel}>✕</button>
+  </div>);
+}
+
+function MedLogSection({medList,medLog,onAdd,onRemove,onUpdate}) {
+  const [k,setK]=useState(0);
+  return (<div style={S.card}>
+    <div style={S.cardTitle}>新增用藥記錄</div>
+    <MedLogForm key={k} medList={medList} onSave={e=>{onAdd(e);setK(x=>x+1);}} onCancel={null}/>
+    {medLog.length>0&&<div style={{marginTop:16,paddingTop:12,borderTop:"1px solid #f1f5f9"}}>
+      <div style={{display:"flex",alignItems:"center",marginBottom:8}}><div style={{...S.cardTitle,marginBottom:0,flex:1,fontSize:13}}>今日用藥記錄</div><span style={{background:"#f1f5f9",color:"#64748b",fontSize:11,padding:"2px 9px",borderRadius:10}}>{medLog.length} 筆</span></div>
+      {medLog.map((entry,i)=><MedLogRow key={entry.id} entry={entry} idx={i} medList={medList} onRemove={()=>onRemove(entry.id)} onUpdate={u=>onUpdate(entry.id,u)}/>)}
+    </div>}
+  </div>);
+}
+
+function MedLogRow({entry,idx,medList,onRemove,onUpdate}) {
+  const [exp,setExp]=useState(false);
+  const taken=medList.filter(m=>entry.medIds?.includes(m.id));
+  return (<div style={S.entryRow}>
+    <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+      <span style={S.entryIndex}>{idx+1}</span>
+      <span style={{fontSize:13,fontWeight:600,color:"#475569"}}>{entry.time||"—"}</span>
+      {taken.length===0&&<span style={{color:"#94a3b8",fontSize:12}}>未勾選藥物</span>}
+      {taken.map(m=><span key={m.id} style={{background:"#f0fdf4",color:"#16a34a",padding:"2px 8px",borderRadius:10,fontSize:11,fontWeight:700}}>💊 {m.name}{m.dose?` ${m.dose}`:""}</span>)}
+    </div>{entry.note&&<div style={{fontSize:12,color:"#94a3b8",marginTop:2,marginLeft:24,fontStyle:"italic"}}>{entry.note}</div>}</div>
+    <button style={S.iconBtn} onClick={()=>setExp(!exp)}>✏️</button>
+    <button style={S.iconBtn} onClick={onRemove}>✕</button>
+    {exp&&<div style={{width:"100%",marginTop:8}}><MedLogForm initial={entry} medList={medList} onSave={u=>{onUpdate(u);setExp(false);}} onCancel={()=>setExp(false)} saveLabel="儲存修改"/></div>}
+  </div>);
+}
+
+function MedLogForm({initial,medList,onSave,onCancel,saveLabel="新增"}) {
+  const [form,setForm]=useState(initial||{time:nowTime(),medIds:[],note:""});
+  const toggleMed=id=>setForm(f=>({...f,medIds:f.medIds?.includes(id)?f.medIds.filter(x=>x!==id):[...(f.medIds||[]),id]}));
+  return (<div style={S.entryForm}>
+    <div style={S.formGroup}><label style={S.label}>用藥時間</label><input type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})} style={S.input}/></div>
+    <div style={{marginBottom:10}}>
+      <label style={S.label}>勾選本次藥物</label>
+      {medList.length===0&&<div style={{color:"#94a3b8",fontSize:12,marginTop:4}}>請先至「管理藥物」設定藥物清單</div>}
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:6}}>
+        {medList.map(m=>{const on=form.medIds?.includes(m.id); return (
+          <button key={m.id} style={{padding:"7px 12px",borderRadius:10,border:"2px solid",borderColor:on?"#16a34a":"#e2e8f0",background:on?"#f0fdf4":"#f8fafc",cursor:"pointer",fontSize:12,fontWeight:700,color:on?"#16a34a":"#94a3b8",display:"flex",flexDirection:"column",alignItems:"center",gap:1}} onClick={()=>toggleMed(m.id)}>
+            <span>💊 {m.name}</span>
+            {m.dose&&<span style={{fontSize:10,fontWeight:500,color:on?"#16a34a":"#94a3b8"}}>{m.dose}</span>}
+            {m.scheduledTime&&<span style={{fontSize:10,fontWeight:500,color:on?"#7c3aed":"#c4b5fd"}}>⏰ {m.scheduledTime}</span>}
+          </button>);
+        })}
+      </div>
+    </div>
+    <div style={S.formGroup}><label style={S.label}>備註</label><input placeholder="例：飯後服用..." value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={S.input}/></div>
+    <div style={{display:"flex",gap:8,marginTop:4}}>
+      <button style={{...S.primaryBtn,flex:1}} onClick={()=>onSave(form)}>{saveLabel}</button>
+      {onCancel&&<button style={{...S.ghostBtn,flex:1}} onClick={onCancel}>取消</button>}
+    </div>
+  </div>);
+}
+
+function TubesTab({tubeRecords,onAdd,onRemove,onUpdate}) {
+  return <div>{TUBE_TYPES.map(tt=><TubeSection key={tt.key} tubeType={tt} records={tubeRecords.filter(r=>r.type===tt.key).sort((a,b)=>b.date.localeCompare(a.date))} onAdd={onAdd} onRemove={onRemove} onUpdate={onUpdate}/>)}</div>;
+}
+
+function TubeSection({tubeType,records,onAdd,onRemove,onUpdate}) {
+  const [k,setK]=useState(0);
+  const latest=records[0];
+  const daysSince=latest?daysBetween(latest.date,todayStr):null;
+  const urgency=daysSince===null?null:daysSince>=28?"danger":daysSince>=21?"warn":"ok";
+  const urgencyStyle={danger:{background:"#fef2f2",color:"#dc2626",border:"1.5px solid #fca5a5"},warn:{background:"#fffbeb",color:"#d97706",border:"1.5px solid #fcd34d"},ok:{background:"#f0fdf4",color:"#16a34a",border:"1.5px solid #86efac"}};
+  return (<div style={S.card}>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+      <div style={{width:36,height:36,borderRadius:10,background:tubeType.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{tubeType.emoji}</div>
+      <div style={{flex:1}}><div style={{fontSize:15,fontWeight:700,color:"#1e293b"}}>{tubeType.label}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>{latest?`上次更換：${latest.date}`:"尚未記錄"}</div></div>
+      {daysSince!==null&&<div style={{...urgencyStyle[urgency],borderRadius:10,padding:"4px 10px",fontSize:12,fontWeight:700}}>{daysSince===0?"今天更換":`已 ${daysSince} 天`}</div>}
+    </div>
+    <TubeForm key={k} tubeType={tubeType} onSave={e=>{onAdd({...e,type:tubeType.key});setK(x=>x+1);}} onCancel={null}/>
+    {records.length>0&&<div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f1f5f9"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:6}}>更換記錄</div>
+      {records.map((r,i)=><TubeRow key={r.id} record={r} isLatest={i===0} onRemove={()=>onRemove(r.id)} onUpdate={u=>onUpdate(r.id,u)}/>)}
+    </div>}
+  </div>);
+}
+
+function TubeRow({record,isLatest,onRemove,onUpdate}) {
+  const [exp,setExp]=useState(false);
+  const tt=TUBE_TYPES.find(t=>t.key===record.type);
+  return (<div style={{...S.entryRow,alignItems:"center"}}>
+    <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8}}>
+      {isLatest&&<span style={{background:tt?.bg,color:tt?.color,fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:8}}>最新</span>}
+      <span style={{fontSize:13,fontWeight:600,color:"#334155"}}>{record.date}</span>
+      {record.note&&<span style={{fontSize:12,color:"#94a3b8",fontStyle:"italic"}}>{record.note}</span>}
+    </div></div>
+    <button style={S.iconBtn} onClick={()=>setExp(!exp)}>✏️</button>
+    <button style={S.iconBtn} onClick={onRemove}>✕</button>
+    {exp&&<div style={{width:"100%",marginTop:8}}><TubeForm initial={record} tubeType={TUBE_TYPES.find(t=>t.key===record.type)} onSave={u=>{onUpdate(u);setExp(false);}} onCancel={()=>setExp(false)} saveLabel="儲存修改"/></div>}
+  </div>);
+}
+
+function TubeForm({tubeType,initial,onSave,onCancel,saveLabel="記錄更換"}) {
+  const [form,setForm]=useState(initial||{date:todayStr,note:""});
+  return (<div style={{...S.entryForm,borderColor:tubeType?.color+"44"}}>
+    <div style={{fontSize:12,fontWeight:700,color:tubeType?.color,marginBottom:10}}>{tubeType?.emoji} {tubeType?.label} 更換記錄</div>
+    <div style={S.formGroup}><label style={S.label}>更換日期</label><input type="date" value={form.date} max={todayStr} onChange={e=>setForm({...form,date:e.target.value})} style={S.input}/></div>
+    <div style={S.formGroup}><label style={S.label}>備註（操作者、異常狀況等）</label><input placeholder="例：護士操作，順利" value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={S.input}/></div>
+    <div style={{display:"flex",gap:8,marginTop:4}}>
+      <button style={{...S.primaryBtn,flex:1,background:`linear-gradient(90deg,${tubeType?.bg},${tubeType?.color}33)`,color:tubeType?.color,border:`1.5px solid ${tubeType?.color}44`}} onClick={()=>onSave(form)}>{saveLabel}</button>
+      {onCancel&&<button style={{...S.ghostBtn,flex:1}} onClick={onCancel}>取消</button>}
+    </div>
+  </div>);
+}
+
+function DiaperTab({diapers,onAdd,onRemove,onUpdate}) {
+  const [k,setK]=useState(0);
+  const peeCount=diapers.filter(d=>d.types?.includes("pee")).length;
+  const poopCount=diapers.filter(d=>d.types?.includes("poop")).length;
+  return (<div>
+    <div style={S.card}><div style={S.cardTitle}>新增換尿布記錄</div><DiaperForm key={k} onSave={e=>{onAdd(e);setK(x=>x+1);}} onCancel={null}/></div>
+    {diapers.length>0&&<div style={S.card}>
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        <div style={{flex:1,background:"#eff6ff",borderRadius:10,padding:"10px 12px",textAlign:"center"}}><div style={{fontSize:20}}>💧</div><div style={{fontSize:18,fontWeight:700,color:"#2563eb",marginTop:2}}>{peeCount}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>尿尿</div></div>
+        <div style={{flex:1,background:"#fef9c3",borderRadius:10,padding:"10px 12px",textAlign:"center"}}><div style={{fontSize:20}}>💩</div><div style={{fontSize:18,fontWeight:700,color:"#ca8a04",marginTop:2}}>{poopCount}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>大便</div></div>
+        <div style={{flex:1,background:"#f0fdf4",borderRadius:10,padding:"10px 12px",textAlign:"center"}}><div style={{fontSize:20}}>🧷</div><div style={{fontSize:18,fontWeight:700,color:"#16a34a",marginTop:2}}>{diapers.length}</div><div style={{fontSize:11,color:"#94a3b8",marginTop:1}}>共換次</div></div>
+      </div>
+      <div style={{...S.cardTitle,marginBottom:8}}>今日換尿布記錄</div>
+      {diapers.map((d,i)=><DiaperRow key={d.id} diaper={d} idx={i} onRemove={()=>onRemove(d.id)} onUpdate={u=>onUpdate(d.id,u)}/>)}
+    </div>}
+  </div>);
+}
+
+function DiaperRow({diaper,idx,onRemove,onUpdate}) {
+  const [exp,setExp]=useState(false);
+  const hasPee=diaper.types?.includes("pee"), hasPoop=diaper.types?.includes("poop");
+  const poopState=POOP_STATES.find(s=>s.key===diaper.poopState);
+  return (<div style={S.entryRow}>
+    <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+      <span style={S.entryIndex}>{idx+1}</span>
+      <span style={{fontSize:13,fontWeight:600,color:"#475569"}}>{diaper.time||"未記錄時間"}</span>
+      {hasPee&&<span style={{background:"#eff6ff",color:"#2563eb",padding:"2px 8px",borderRadius:10,fontSize:12,fontWeight:700}}>💧 尿尿</span>}
+      {hasPoop&&<span style={{background:poopState?.bg||"#fef9c3",color:poopState?.color||"#ca8a04",padding:"2px 8px",borderRadius:10,fontSize:12,fontWeight:700}}>{poopState?.emoji||"💩"} 大便{poopState?` · ${poopState.label}`:""}</span>}
+      {!hasPee&&!hasPoop&&<span style={{color:"#94a3b8",fontSize:12}}>未選類型</span>}
+    </div>{diaper.note&&<div style={{fontSize:12,color:"#94a3b8",marginTop:2,marginLeft:24,fontStyle:"italic"}}>{diaper.note}</div>}</div>
+    <button style={S.iconBtn} onClick={()=>setExp(!exp)}>✏️</button>
+    <button style={S.iconBtn} onClick={onRemove}>✕</button>
+    {exp&&<div style={{width:"100%",marginTop:8}}><DiaperForm initial={diaper} onSave={u=>{onUpdate(u);setExp(false);}} onCancel={()=>setExp(false)} saveLabel="儲存修改"/></div>}
+  </div>);
+}
+
+function DiaperForm({initial,onSave,onCancel,saveLabel="新增"}) {
+  const [form,setForm]=useState(initial||{time:nowTime(),types:[],poopState:"",note:""});
+  const toggle=type=>setForm(f=>{const types=f.types?.includes(type)?f.types.filter(t=>t!==type):[...(f.types||[]),type];if(type==="poop"&&f.types?.includes("poop"))return{...f,types,poopState:""};return{...f,types};});
+  const hasPoop=form.types?.includes("poop");
+  return (<div style={S.entryForm}>
+    <div style={S.formGroup}><label style={S.label}>換尿布時間</label><input type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})} style={S.input}/></div>
+    <div style={{marginBottom:10}}>
+      <label style={S.label}>類型（可複選）</label>
+      <div style={{display:"flex",gap:8,marginTop:4}}>
+        <button style={{flex:1,padding:"12px 8px",borderRadius:12,border:"2px solid",borderColor:form.types?.includes("pee")?"#2563eb":"#e2e8f0",background:form.types?.includes("pee")?"#eff6ff":"#f8fafc",cursor:"pointer",fontSize:13,fontWeight:700,color:form.types?.includes("pee")?"#2563eb":"#94a3b8"}} onClick={()=>toggle("pee")}>💧<br/><span style={{fontSize:12}}>尿尿</span></button>
+        <button style={{flex:1,padding:"12px 8px",borderRadius:12,border:"2px solid",borderColor:hasPoop?"#ca8a04":"#e2e8f0",background:hasPoop?"#fef9c3":"#f8fafc",cursor:"pointer",fontSize:13,fontWeight:700,color:hasPoop?"#ca8a04":"#94a3b8"}} onClick={()=>toggle("poop")}>💩<br/><span style={{fontSize:12}}>大便</span></button>
+      </div>
+    </div>
+    {hasPoop&&<div style={{...S.subForm,borderColor:"#fcd34d",marginBottom:10}}>
+      <label style={{...S.label,marginBottom:8}}>大便狀態</label>
+      <div style={{display:"flex",gap:8}}>
+        {POOP_STATES.map(s=><button key={s.key} style={{flex:1,padding:"10px 6px",borderRadius:12,border:"2px solid",borderColor:form.poopState===s.key?s.color:"#e2e8f0",background:form.poopState===s.key?s.bg:"#f8fafc",cursor:"pointer",fontSize:13,fontWeight:700,color:form.poopState===s.key?s.color:"#94a3b8"}} onClick={()=>setForm({...form,poopState:form.poopState===s.key?"":s.key})}>{s.emoji}<br/><span style={{fontSize:12}}>{s.label}</span></button>)}
+      </div>
+    </div>}
+    <div style={S.formGroup}><label style={S.label}>備註（顏色、量等）</label><input placeholder="例：深黃色、量多..." value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={S.input}/></div>
+    <div style={{display:"flex",gap:8,marginTop:4}}>
+      <button style={{...S.primaryBtn,flex:1}} onClick={()=>onSave(form)}>{saveLabel}</button>
+      {onCancel&&<button style={{...S.ghostBtn,flex:1}} onClick={onCancel}>取消</button>}
+    </div>
+  </div>);
+}
+
+function HistoryTab({records,allDates,tubeRecords,diaperRecords,medLog,sleepLog,onSelect}) {
+  const tubeByDate={};
+  tubeRecords.forEach(r=>{if(!tubeByDate[r.date])tubeByDate[r.date]=[];tubeByDate[r.date].push(r);});
+  const allHistoryDates=[...new Set([...allDates,...Object.keys(tubeByDate),...Object.keys(diaperRecords),...Object.keys(medLog),...Object.keys(sleepLog)])].sort().reverse();
+  if(!allHistoryDates.length) return <div style={S.empty}>尚無歷史記錄<br/>開始記錄後即可在此查閱</div>;
+  return (<div><div style={S.card}>
+    <div style={S.cardTitle}>歷史記錄（{allHistoryDates.length} 天）</div>
+    {allHistoryDates.map(date=>{
+      const day=records[date]||{}, vitals=day.vitals||[], feedings=day.feedings||[], tubes=tubeByDate[date]||[], diapers=diaperRecords[date]||[], meds=medLog[date]||[], sleeps=sleepLog[date]||[];
+      const lv=vitals[vitals.length-1];
+      return (<button key={date} style={S.historyRow} onClick={()=>onSelect(date)}>
+        <div style={S.historyDate}>{date}</div>
+        <div style={{flex:1,display:"flex",flexWrap:"wrap",gap:4}}>
+          {vitals.length>0&&<span style={S.historyChip}>💓 {vitals.length}次{lv?.hr?` · ${lv.hr}bpm`:""}{lv?.spo2?` · ${lv.spo2}%`:""}</span>}
+          {feedings.filter(e=>e.type==="milk").length>0&&<span style={S.historyChip}>🍼 {feedings.filter(e=>e.type==="milk").length}次</span>}
+          {feedings.filter(e=>e.type==="solid").length>0&&<span style={S.historyChip}>🥣 {feedings.filter(e=>e.type==="solid").length}次</span>}
+          {feedings.filter(e=>e.type==="water").length>0&&<span style={S.historyChip}>💧 {feedings.filter(e=>e.type==="water").length}次</span>}
+          {diapers.filter(d=>d.types?.includes("pee")).length>0&&<span style={{...S.historyChip,background:"#eff6ff",color:"#2563eb"}}>💧尿 {diapers.filter(d=>d.types?.includes("pee")).length}次</span>}
+          {diapers.filter(d=>d.types?.includes("poop")).length>0&&<span style={{...S.historyChip,background:"#fef9c3",color:"#ca8a04"}}>💩 {diapers.filter(d=>d.types?.includes("poop")).length}次</span>}
+          {meds.length>0&&<span style={{...S.historyChip,background:"#f0fdf4",color:"#16a34a"}}>💊 {meds.length}次</span>}
+          {sleeps.filter(s=>s.type==="sleep").length>0&&<span style={{...S.historyChip,background:"#e0f2fe",color:"#0369a1"}}>😴 {sleeps.filter(s=>s.type==="sleep").length}次</span>}
+          {tubes.map(t=>{const tt=TUBE_TYPES.find(x=>x.key===t.type);return <span key={t.id} style={{...S.historyChip,background:tt?.bg,color:tt?.color}}>🔧 換{tt?.label}</span>;})}
+        </div>
+        <span style={{color:"#94a3b8",fontSize:18}}>›</span>
+      </button>);
+    })}
+  </div></div>);
+}
+
+const S = {
+  app:{fontFamily:"'Helvetica Neue',Arial,sans-serif",maxWidth:520,margin:"0 auto",background:"#f8fafc",minHeight:"100vh",paddingBottom:40},
+  header:{padding:"20px 20px 18px",display:"flex",alignItems:"center",gap:12,position:"relative"},
+  title:{color:"#fff",fontSize:20,fontWeight:700,letterSpacing:0.5},
+  subtitle:{color:"rgba(255,255,255,0.8)",fontSize:12,marginTop:2},
+  savedBadge:{position:"absolute",right:16,top:"50%",transform:"translateY(-50%)",background:"rgba(255,255,255,0.25)",color:"#fff",padding:"4px 10px",borderRadius:20,fontSize:12,fontWeight:600},
+  childBar:{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"10px 12px"},
+  childList:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"},
+  childBtn:{display:"flex",alignItems:"center",gap:5,padding:"5px 12px",borderRadius:20,border:"1.5px solid #e2e8f0",background:"none",cursor:"pointer",fontSize:13,color:"#475569",fontWeight:500},
+  childBtnActive:{fontWeight:700,color:"#1e293b"},
+  childDot:{width:8,height:8,borderRadius:"50%",display:"inline-block"},
+  removeChildBtn:{marginLeft:4,color:"#94a3b8",fontSize:11,cursor:"pointer"},
+  addChildBtn:{padding:"5px 12px",borderRadius:20,border:"1.5px dashed #93c5fd",background:"none",cursor:"pointer",fontSize:13,color:"#3b82f6",fontWeight:600},
+  modalOverlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100},
+  modal:{background:"#fff",borderRadius:16,padding:24,width:300,boxShadow:"0 8px 32px rgba(0,0,0,0.18)"},
+  datebar:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"12px 16px",background:"#fff",borderBottom:"1px solid #e2e8f0"},
+  arrowBtn:{background:"none",border:"none",fontSize:24,cursor:"pointer",color:"#3b82f6",padding:"0 8px",lineHeight:1},
+  dateInput:{border:"1.5px solid #e2e8f0",borderRadius:8,padding:"6px 10px",fontSize:15,color:"#1e293b",background:"#f8fafc",cursor:"pointer"},
+  todayTag:{background:"#dbeafe",color:"#2563eb",padding:"2px 8px",borderRadius:12,fontSize:11,fontWeight:600},
+  tabs:{display:"flex",background:"#fff"},
+  tab:{flex:1,padding:"12px 2px",border:"none",background:"none",cursor:"pointer",fontSize:12,color:"#94a3b8",fontWeight:500,borderBottom:"2px solid transparent",transition:"all 0.15s"},
+  tabActive:{color:"#3b82f6",borderBottomColor:"#3b82f6",background:"#eff6ff"},
+  content:{padding:"12px 12px 0"},
+  card:{background:"#fff",borderRadius:14,padding:"16px",marginBottom:12,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"},
+  cardTitle:{fontSize:14,fontWeight:700,color:"#334155",marginBottom:12},
+  formGroup:{flex:1,marginBottom:10},
+  label:{display:"block",fontSize:11,color:"#94a3b8",fontWeight:600,marginBottom:4,textTransform:"uppercase",letterSpacing:0.5},
+  input:{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:8,padding:"8px 10px",fontSize:14,color:"#1e293b",boxSizing:"border-box",outline:"none",background:"#f8fafc"},
+  primaryBtn:{width:"100%",background:"linear-gradient(90deg,#6ee7b7,#3b82f6)",color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:14,fontWeight:700,cursor:"pointer",marginTop:4},
+  ghostBtn:{width:"100%",background:"#f1f5f9",color:"#64748b",border:"none",borderRadius:10,padding:"11px",fontSize:14,fontWeight:600,cursor:"pointer",marginTop:4},
+  error:{color:"#ef4444",fontSize:12,marginBottom:6},
+  vitalRow:{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 0",borderBottom:"1px solid #f1f5f9"},
+  vitalTime:{color:"#94a3b8",fontSize:12,minWidth:38,paddingTop:3,fontWeight:600},
+  vitalChip:{background:"#f1f5f9",borderRadius:8,padding:"4px 10px",fontSize:13,display:"flex",alignItems:"center",gap:6},
+  statusDot:{padding:"1px 7px",borderRadius:10,fontSize:11,fontWeight:700,color:"#fff"},
+  vitalNote:{width:"100%",color:"#94a3b8",fontSize:12,paddingLeft:2,fontStyle:"italic"},
+  iconBtn:{background:"none",border:"none",color:"#cbd5e1",cursor:"pointer",fontSize:14,padding:"2px 4px"},
+  entryRow:{display:"flex",alignItems:"flex-start",flexWrap:"wrap",gap:4,padding:"9px 0",borderBottom:"1px solid #f1f5f9"},
+  entryIndex:{background:"#e0f2fe",color:"#0369a1",borderRadius:"50%",width:18,height:18,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0,marginTop:1},
+  typeTag:{padding:"2px 8px",borderRadius:10,fontSize:11,fontWeight:700},
+  entryForm:{background:"#f8fafc",border:"1.5px solid #e2e8f0",borderRadius:12,padding:14,marginTop:6,marginBottom:4},
+  typeBtn:{flex:1,padding:"8px 4px",borderRadius:10,border:"1.5px solid #e2e8f0",background:"#f8fafc",cursor:"pointer",fontSize:12,fontWeight:600,color:"#64748b"},
+  typeBtnActive:{border:"1.5px solid"},
+  subForm:{background:"#fff",border:"1.5px solid",borderRadius:10,padding:12,marginBottom:10},
+  portionBtn:{border:"1.5px solid transparent",borderRadius:8,padding:"5px 10px",fontSize:12,cursor:"pointer",fontWeight:600},
+  empty:{textAlign:"center",color:"#94a3b8",padding:"48px 24px",fontSize:14,lineHeight:1.8},
+  historyRow:{display:"flex",alignItems:"center",gap:10,padding:"12px 0",borderBottom:"1px solid #f1f5f9",background:"none",border:"none",width:"100%",cursor:"pointer",textAlign:"left"},
+  historyDate:{fontWeight:700,color:"#334155",fontSize:13,minWidth:90},
+  historyChip:{background:"#f1f5f9",padding:"2px 8px",borderRadius:8,fontSize:11,color:"#475569"},
+};
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
