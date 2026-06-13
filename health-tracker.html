@@ -45,16 +45,13 @@ const initialVitals = () => ({hr:"",spo2:"",time:"",note:""});
 const API_URL = "https://script.google.com/macros/s/AKfycbwo2Eejs8ZbO8C0pyussVHt6WqWSWpBJG8n3Od99uudwzeYr1_LxYB4Kgco2TdrhUb56g/exec";
 
 const load = async (key) => {
-  const r = await fetch(`${API_URL}?key=${encodeURIComponent(key)}`);
+  const r = await fetch(`${API_URL}?action=get&key=${encodeURIComponent(key)}`);
   const d = await r.json();
   return d.value ? JSON.parse(d.value) : null;
 };
 const save = async (key, val) => {
-  await fetch(API_URL, {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({key, value: JSON.stringify(val)}),
-  });
+  const encoded = encodeURIComponent(JSON.stringify(val));
+  await fetch(`${API_URL}?action=set&key=${encodeURIComponent(key)}&value=${encoded}`);
 };
 
 function App() {
