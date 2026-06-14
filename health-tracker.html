@@ -7,9 +7,9 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script type="module" id="firebase-init">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
   const firebaseConfig = {
     apiKey: "AIzaSyB8IhEsdO6wjJaMyKoNxabKCAn9UeFtTKo",
     authDomain: "baby-health-4e478.firebaseapp.com",
@@ -18,14 +18,14 @@
     messagingSenderId: "1030686799671",
     appId: "1:1030686799671:web:f82def9f31a34e1a20ccb2"
   };
-  const app = initializeApp(firebaseConfig);
-  const db  = getFirestore(app);
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
   window._fbLoad = async (key) => {
-    const snap = await getDoc(doc(db, "health", key));
-    return snap.exists() ? snap.data().value : null;
+    const snap = await db.collection("health").doc(key).get();
+    return snap.exists ? snap.data().value : null;
   };
   window._fbSave = async (key, val) => {
-    await setDoc(doc(db, "health", key), { value: val, updatedAt: new Date().toISOString() });
+    await db.collection("health").doc(key).set({ value: val, updatedAt: new Date().toISOString() });
   };
   window._fbReady = true;
 </script>
