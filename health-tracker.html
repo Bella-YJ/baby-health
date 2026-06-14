@@ -7,6 +7,28 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="module" id="firebase-init">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  const firebaseConfig = {
+    apiKey: "AIzaSyB8IhEsdO6wjJaMyKoNxabKCAn9UeFtTKo",
+    authDomain: "baby-health-4e478.firebaseapp.com",
+    projectId: "baby-health-4e478",
+    storageBucket: "baby-health-4e478.firebasestorage.app",
+    messagingSenderId: "1030686799671",
+    appId: "1:1030686799671:web:f82def9f31a34e1a20ccb2"
+  };
+  const app = initializeApp(firebaseConfig);
+  const db  = getFirestore(app);
+  window._fbLoad = async (key) => {
+    const snap = await getDoc(doc(db, "health", key));
+    return snap.exists() ? snap.data().value : null;
+  };
+  window._fbSave = async (key, val) => {
+    await setDoc(doc(db, "health", key), { value: val, updatedAt: new Date().toISOString() });
+  };
+  window._fbReady = true;
+</script>
 <style>*{box-sizing:border-box;margin:0;padding:0}body{background:#f8fafc;font-family:'Helvetica Neue',Arial,sans-serif}</style>
 </head>
 <body>
@@ -42,52 +64,20 @@ const POOP_STATES = [
 const blankEntry = () => ({id:Date.now()+Math.random(),timeStart:"",timeEnd:"",type:null,milk:{water:"",scoops:""},solid:{portion:null,note:""},water:{amount:""}});
 const initialVitals = () => ({hr:"",spo2:"",time:"",note:""});
 
-const API_URL = "https://script.google.com/macros/s/AKfycbwo2Eejs8ZbO8C0pyussVHt6WqWSWpBJG8n3Od99uudwzeYr1_LxYB4Kgco2TdrhUb56g/exec";
-
-// GAS drops URL params after redirect, so we use window.__gasResp with a request ID
-const gasCall = (url) => new Promise((resolve, reject) => {
-  const rid = "r" + Date.now() + Math.floor(Math.random()*1e6);
-  const script = document.createElement("script");
-  const timer = setTimeout(() => {
-    delete pending[rid];
-    if (script.parentNode) script.parentNode.removeChild(script);
-    reject(new Error("timeout"));
-  }, 20000);
-  pending[rid] = { resolve, reject, timer, script };
-  script.src = url + "&rid=" + rid;
-  script.onerror = () => {
-    clearTimeout(timer);
-    delete pending[rid];
-    reject(new Error("script load error"));
-  };
-  document.head.appendChild(script);
+// Wait for Firebase to be ready
+const waitFb = () => new Promise((resolve) => {
+  if (window._fbReady) return resolve();
+  const t = setInterval(() => { if (window._fbReady) { clearInterval(t); resolve(); } }, 50);
 });
 
-const pending = {};
-window.__gasResp = (rid, data) => {
-  const p = pending[rid];
-  if (!p) return;
-  clearTimeout(p.timer);
-  if (p.script.parentNode) p.script.parentNode.removeChild(p.script);
-  delete pending[rid];
-  p.resolve(data);
-};
-
 const load = async (key) => {
-  const url = `${API_URL}?action=get&key=${encodeURIComponent(key)}`;
-  const d = await gasCall(url);
-  return d.value ? JSON.parse(d.value) : null;
+  await waitFb();
+  const val = await window._fbLoad(key);
+  return val ? JSON.parse(val) : null;
 };
-
-const CHUNK_SIZE = 800;
 const save = async (key, val) => {
-  const full = JSON.stringify(val);
-  const total = Math.ceil(full.length / CHUNK_SIZE);
-  for (let i = 0; i < total; i++) {
-    const chunk = full.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-    const url = `${API_URL}?action=chunk&key=${encodeURIComponent(key)}&chunk=${encodeURIComponent(chunk)}&idx=${i}&total=${total}`;
-    await gasCall(url);
-  }
+  await waitFb();
+  await window._fbSave(key, JSON.stringify(val));
 };
 
 function App() {
@@ -227,7 +217,7 @@ function App() {
         <div style={{fontSize:16,fontWeight:700,color:"#dc2626",marginBottom:8}}>⚠️ 無法連線</div>
         <div style={{fontSize:13,color:"#7f1d1d",marginBottom:12}}>錯誤：{apiError}</div>
         <div style={{fontSize:13,color:"#334155",lineHeight:1.8}}>
-          請確認 Apps Script 已部署，存取權為「所有人」，並已完成 Google 授權。
+          請確認網路連線正常，並重新整理頁面。
         </div>
         <button style={{...S.primaryBtn,marginTop:16}} onClick={()=>window.location.reload()}>重新連線</button>
       </div>
