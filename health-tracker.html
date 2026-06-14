@@ -44,29 +44,38 @@ const initialVitals = () => ({hr:"",spo2:"",time:"",note:""});
 
 const API_URL = "https://script.google.com/macros/s/AKfycbwo2Eejs8ZbO8C0pyussVHt6WqWSWpBJG8n3Od99uudwzeYr1_LxYB4Kgco2TdrhUb56g/exec";
 
-// JSONP — only reliable way to call GAS from browser with redirect
-const jsonpGet = (url) => new Promise((resolve, reject) => {
-  const cb = "__cb_" + Date.now() + "_" + Math.floor(Math.random()*1e9);
+// GAS drops URL params after redirect, so we use window.__gasResp with a request ID
+const gasCall = (url) => new Promise((resolve, reject) => {
+  const rid = "r" + Date.now() + Math.floor(Math.random()*1e6);
   const script = document.createElement("script");
   const timer = setTimeout(() => {
-    delete window[cb];
+    delete pending[rid];
     if (script.parentNode) script.parentNode.removeChild(script);
     reject(new Error("timeout"));
-  }, 15000);
-  window[cb] = (data) => {
+  }, 20000);
+  pending[rid] = { resolve, reject, timer, script };
+  script.src = url + "&rid=" + rid;
+  script.onerror = () => {
     clearTimeout(timer);
-    delete window[cb];
-    if (script.parentNode) script.parentNode.removeChild(script);
-    resolve(data);
+    delete pending[rid];
+    reject(new Error("script load error"));
   };
-  script.src = url + "&callback=" + cb;
-  script.onerror = () => { clearTimeout(timer); reject(new Error("script error")); };
   document.head.appendChild(script);
 });
 
+const pending = {};
+window.__gasResp = (rid, data) => {
+  const p = pending[rid];
+  if (!p) return;
+  clearTimeout(p.timer);
+  if (p.script.parentNode) p.script.parentNode.removeChild(p.script);
+  delete pending[rid];
+  p.resolve(data);
+};
+
 const load = async (key) => {
   const url = `${API_URL}?action=get&key=${encodeURIComponent(key)}`;
-  const d = await jsonpGet(url);
+  const d = await gasCall(url);
   return d.value ? JSON.parse(d.value) : null;
 };
 
@@ -77,7 +86,7 @@ const save = async (key, val) => {
   for (let i = 0; i < total; i++) {
     const chunk = full.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
     const url = `${API_URL}?action=chunk&key=${encodeURIComponent(key)}&chunk=${encodeURIComponent(chunk)}&idx=${i}&total=${total}`;
-    await jsonpGet(url);
+    await gasCall(url);
   }
 };
 
