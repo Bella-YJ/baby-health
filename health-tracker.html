@@ -45,17 +45,27 @@ const initialVitals = () => ({hr:"",spo2:"",time:"",note:""});
 const API_URL = "https://script.google.com/macros/s/AKfycbwo2Eejs8ZbO8C0pyussVHt6WqWSWpBJG8n3Od99uudwzeYr1_LxYB4Kgco2TdrhUb56g/exec";
 
 const load = async (key) => {
-  const r = await fetch(`${API_URL}?key=${encodeURIComponent(key)}`);
-  const d = await r.json();
+  const url = `${API_URL}?action=get&key=${encodeURIComponent(key)}`;
+  const r = await fetch(url, { redirect: "follow" });
+  const text = await r.text();
+  const d = JSON.parse(text);
   return d.value ? JSON.parse(d.value) : null;
 };
+
+// GAS redirect turns POST into GET — so we use GET for everything.
+// Large values are split into chunks and reassembled server-side.
+const CHUNK_SIZE = 1000;
 const save = async (key, val) => {
-  const body = new URLSearchParams({ key, value: JSON.stringify(val) });
-  await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
+  const full = JSON.stringify(val);
+  const total = Math.ceil(full.length / CHUNK_SIZE);
+  for (let i = 0; i < total; i++) {
+    const chunk = full.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const url = `${API_URL}?action=chunk&key=${encodeURIComponent(key)}&chunk=${encodeURIComponent(chunk)}&idx=${i}&total=${total}`;
+    const r = await fetch(url, { redirect: "follow" });
+    const text = await r.text();
+    const d = JSON.parse(text);
+    if (!d.ok && !d.done) throw new Error("chunk failed: " + text);
+  }
 };
 
 function App() {
