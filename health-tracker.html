@@ -44,27 +44,40 @@ const initialVitals = () => ({hr:"",spo2:"",time:"",note:""});
 
 const API_URL = "https://script.google.com/macros/s/AKfycbwo2Eejs8ZbO8C0pyussVHt6WqWSWpBJG8n3Od99uudwzeYr1_LxYB4Kgco2TdrhUb56g/exec";
 
+// JSONP — only reliable way to call GAS from browser with redirect
+const jsonpGet = (url) => new Promise((resolve, reject) => {
+  const cb = "__cb_" + Date.now() + "_" + Math.floor(Math.random()*1e9);
+  const script = document.createElement("script");
+  const timer = setTimeout(() => {
+    delete window[cb];
+    if (script.parentNode) script.parentNode.removeChild(script);
+    reject(new Error("timeout"));
+  }, 15000);
+  window[cb] = (data) => {
+    clearTimeout(timer);
+    delete window[cb];
+    if (script.parentNode) script.parentNode.removeChild(script);
+    resolve(data);
+  };
+  script.src = url + "&callback=" + cb;
+  script.onerror = () => { clearTimeout(timer); reject(new Error("script error")); };
+  document.head.appendChild(script);
+});
+
 const load = async (key) => {
   const url = `${API_URL}?action=get&key=${encodeURIComponent(key)}`;
-  const r = await fetch(url, { redirect: "follow" });
-  const text = await r.text();
-  const d = JSON.parse(text);
+  const d = await jsonpGet(url);
   return d.value ? JSON.parse(d.value) : null;
 };
 
-// GAS redirect turns POST into GET — so we use GET for everything.
-// Large values are split into chunks and reassembled server-side.
-const CHUNK_SIZE = 1000;
+const CHUNK_SIZE = 800;
 const save = async (key, val) => {
   const full = JSON.stringify(val);
   const total = Math.ceil(full.length / CHUNK_SIZE);
   for (let i = 0; i < total; i++) {
     const chunk = full.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
     const url = `${API_URL}?action=chunk&key=${encodeURIComponent(key)}&chunk=${encodeURIComponent(chunk)}&idx=${i}&total=${total}`;
-    const r = await fetch(url, { redirect: "follow" });
-    const text = await r.text();
-    const d = JSON.parse(text);
-    if (!d.ok && !d.done) throw new Error("chunk failed: " + text);
+    await jsonpGet(url);
   }
 };
 
